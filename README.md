@@ -1,4 +1,4 @@
-# Outerworld
+# OuterwoRLd
 
 <img width="740" alt="Outerworld gameplay" src="docs/demo.gif" />
 
