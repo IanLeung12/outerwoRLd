@@ -2,6 +2,7 @@
 #include "constants.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
+#include <numbers>
 
 void Ship::update(float dt, const ShipInput& input) {
     if (input.thrust) {
@@ -29,13 +30,16 @@ glm::mat4 Ship::modelMatrix() const {
 }
 
 void Ship::reset() {
-    position.x = 0;
-    position.y = 0;
+    position = spawnPoint;
     velocity.x = 0;
     velocity.y = 0;
-    angle = 0;
+    angle = -0.5 * std::numbers::pi_v<float>;
 }
 
 glm::vec2 Ship::getPosition() const {
     return position;
+}
+
+void Ship::setSpawn(glm::vec2 point) {
+    spawnPoint = point;
 }

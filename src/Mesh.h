@@ -12,6 +12,7 @@ public:
     void draw(unsigned int mode) const;
 
     static std::vector<float> makeCircle(float radius, int segments);
+    static std::vector<float> makeRect();
 
 private:
     unsigned int vao;

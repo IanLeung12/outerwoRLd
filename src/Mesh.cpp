@@ -32,3 +32,7 @@ std::vector<float> Mesh::makeCircle(float radius, int segments) {
     }
     return circle;
 }
+
+std::vector<float> Mesh::makeRect() {
+    return std::vector<float> {-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0};
+}

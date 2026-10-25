@@ -1,4 +1,5 @@
 #pragma once
+#include <glm/glm.hpp>
 
 namespace constants {
     // Window
@@ -11,5 +12,9 @@ namespace constants {
     constexpr float SHIP_TURN_SPEED = 3.5f;   // radians per second
     constexpr float SHIP_THRUST = 1.5f;       // units per second, per second
     constexpr float SHIP_DRAG = 0.75f;      
-    constexpr float SHIP_RADIUS = 0.04f;   // fraction of velocity kept after 1 second
+    constexpr float SHIP_RADIUS = 0.04f;   // hitbox
+
+    constexpr glm::vec4 COLOR_SHIP{1.0f, 1.0f, 1.0f, 1.0f};
+    constexpr glm::vec4 COLOR_OBSTACLE{1.0f, 0.2f, 0.2f, 1.0f};
+    constexpr glm::vec4 COLOR_GOAL{0.3f, 1.0f, 0.3f, 1.0f};
 }
