@@ -1,6 +1,6 @@
 # Outerworld
 
-A 2D space-flight physics game, and a reinforcement learning agent that learns to fly it. The ship thrusts and
+A 2D space-flight physics game, and a reinforcement learning (RL) agent that learns to fly it. The ship thrusts and
 turns from a spawn point to a goal, past circular planets that destroy it on contact and pull it in with gravity.
 Levels are procedurally generated. The agent trains on one set of levels and is measured on a separate held-out set
 it has never seen, so the results measure general flying skill, not memorized levels.
@@ -13,10 +13,10 @@ it has never seen, so the results measure general flying skill, not memorized le
   beyond the standard library and GLM.
 - **OpenGL** (through GLAD and GLFW) for the playable game and the replay viewer.
 - **CMake, Ninja and MinGW g++ 13** for building; VS Code with CMake Tools.
-- **Python 3.14** with **ctypes**: the simulation is compiled into a shared library (`outerworld_py.dll`) with a
+- **Python 3.14** with **ctypes**: the simulation is compiled into a dynamic-link library (DLL), `outerworld_py.dll`, with a
   plain C interface, which steps many worlds in one call.
-- **PyTorch** for the agent, trained with Proximal Policy Optimization written from scratch (no reinforcement
-  learning library); **TensorBoard** for training curves; **NumPy** and **Matplotlib**.
+- **PyTorch** for the agent, trained with Proximal Policy Optimization (PPO) written from scratch (no RL
+  library); **TensorBoard** for training curves; **NumPy** and **Matplotlib**.
 
 ## Layout
 
@@ -50,14 +50,14 @@ python experiments\analyze.py runs\exp\<run>\final.pt 0.0 0.5 1.0 --levels 1000
 - **Network:** Deep Sets. A small shared network encodes each planet, the encodings are max-pooled over the planets
   present, and a standard network combines the result with the rest of the observation. Separate policy and value
   networks.
-- **Training:** Proximal Policy Optimization over 64 parallel worlds, a difficulty curriculum from 0 to 1, and half
+- **Training:** PPO over 64 parallel worlds, a difficulty curriculum from 0 to 1, and half
   of the training levels built with a planet directly across the straight line to the goal.
 
 ## Findings
 
 What made the difference, in order of discovery:
 
-1. **Action repeat (8 physics steps per decision).** Generalized advantage estimation with γλ ≈ 0.94 gives about 17
+1. **Action repeat (8 physics steps per decision).** Generalized advantage estimation (GAE) with γλ ≈ 0.94 gives about 17
    decisions of effective lookahead. Without repeat that is 0.3 seconds, too short to connect turning early with
    avoiding a crash a second later. With repeat it is about 2.3 seconds. A control with 4 times the data and no
    repeat did not learn to dodge, so the gain comes from the decision timescale, not the amount of data.
@@ -106,5 +106,5 @@ Success on held-out levels (greedy actions, 200 levels per difficulty):
 - **Attention over planets** instead of max pooling, so planets can be related to each other (for example, a gap
   between two planets).
 - **Generalize over physics:** randomize thrust, drag and gravity per level.
-- **Behaviour cloning from human play** (replays record every action), then fine-tuning with reinforcement learning.
-- **A value-based method** (deep Q-learning) on the same environment, for comparison.
+- **Behaviour cloning from human play** (replays record every action), then fine-tuning with RL.
+- **A value-based method**, a deep Q-network (DQN), on the same environment, for comparison.
