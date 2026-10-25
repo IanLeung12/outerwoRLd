@@ -4,10 +4,13 @@
 #include "constants.h"
 #include "Shader.h"
 #include "Mesh.h"
+#include "LevelGen.h"
 #include "World.h"
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <glm/glm.hpp>
@@ -35,17 +38,51 @@ static ShipInput readKeyboard(GLFWwindow* window) {
     return input;
 }
 
+// Which level to play: the hand-made test level, or a generated one. Written in replays as
+// "test" or "generated <seed> <difficulty>".
+struct LevelChoice {
+    bool generated = false;
+    uint32_t seed = 0;
+    float difficulty = 0.5f;
+};
+
+static Level buildLevel(const LevelChoice& choice) {
+    return choice.generated ? generateLevel(choice.seed, paramsForDifficulty(choice.difficulty)) : makeTestLevel();
+}
+
+static std::string describe(const LevelChoice& choice) {
+    if (!choice.generated) return "test";
+    return "generated " + std::to_string(choice.seed) + " " + std::to_string(choice.difficulty);
+}
+
+static bool parseLevel(std::istream& in, LevelChoice& choice) {
+    std::string name;
+    if (!(in >> name)) return false;
+    if (name == "test") {
+        choice.generated = false;
+        return true;
+    }
+    if (name == "generated" && in >> choice.seed >> choice.difficulty) {
+        choice.generated = true;
+        return true;
+    }
+    std::cerr << "Unknown level '" << name << "'\n";
+    return false;
+}
+
 // A recorded episode, saved by OuterworldEnv.save_replay() in Python. The simulation is
 // deterministic, so the level plus the list of actions recreates the episode exactly.
 struct Replay {
-    std::string level;
+    LevelChoice level;
     std::vector<int> actions;
 };
 
 static bool loadReplay(const char* path, Replay& replay) {
     std::ifstream file(path);
-    std::string keyword;
-    if (!(file >> keyword >> replay.level) || keyword != "level") {
+    std::string firstLine, keyword;
+    std::getline(file, firstLine);
+    std::istringstream header(firstLine);
+    if (!(header >> keyword) || keyword != "level" || !parseLevel(header, replay.level)) {
         std::cerr << "Couldn't read replay " << path << "\n";
         return false;
     }
@@ -64,23 +101,29 @@ static bool loadReplay(const char* path, Replay& replay) {
     return true;
 }
 
-static bool levelByName(const std::string& name, Level& level) {
-    if (name == "test") {
-        level = makeTestLevel();
-        return true;
-    }
-    std::cerr << "Unknown level '" << name << "'\n";
-    return false;
-}
-
 int main(int argc, char** argv) {
-    // Usage: outerworld                    play with the keyboard (W thrust, A/D turn, Esc quit)
-    //        outerworld --replay <file>    watch a recorded episode, on a loop
-    bool replaying = argc >= 3 && std::string(argv[1]) == "--replay";
+    // Usage: outerworld                              play the test level (W thrust, A/D turn, Esc quit)
+    //        outerworld --seed <n> [--difficulty <d>]  play a generated level (default difficulty 0.5)
+    //        outerworld --replay <file>              watch a recorded episode, on a loop
+    // While playing, N / P switch to the next / previous generated level.
+    bool replaying = false;
     Replay replay;
-    Level startLevel = makeTestLevel();
-    if (replaying && (!loadReplay(argv[2], replay) || !levelByName(replay.level, startLevel))) {
-        return 1;
+    LevelChoice choice;
+    for (int i = 1; i + 1 < argc; i += 2) {
+        std::string flag = argv[i];
+        if (flag == "--replay") {
+            replaying = true;
+            if (!loadReplay(argv[i + 1], replay)) return 1;
+            choice = replay.level;
+        } else if (flag == "--seed") {
+            choice.generated = true;
+            choice.seed = (uint32_t)std::stoul(argv[i + 1]);
+        } else if (flag == "--difficulty") {
+            choice.difficulty = std::stof(argv[i + 1]);
+        } else {
+            std::cerr << "Unknown option " << flag << "\n";
+            return 1;
+        }
     }
 
     if (!glfwInit()) return -1;
@@ -134,11 +177,14 @@ int main(int argc, char** argv) {
 
         Shader shader(vertexSrc, fragSrc);
 
-        World world(startLevel);
+        World world(buildLevel(choice));
         size_t replayIndex = 0;
         if (replaying) {
-            std::cout << "Replaying " << replay.actions.size() << " steps on level '" << replay.level << "'\n";
+            std::cout << "Replaying " << replay.actions.size() << " steps on level '" << describe(choice) << "'\n";
+        } else {
+            std::cout << "Level '" << describe(choice) << "' (N / P for next / previous generated level)\n";
         }
+        bool nWasDown = false, pWasDown = false;
 
         // Fixed timestep: real time piles up in the accumulator, and the world advances
         // in exact SIM_DT steps however fast or slow the screen refreshes.
@@ -152,6 +198,21 @@ int main(int argc, char** argv) {
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
                 glfwSetWindowShouldClose(window, true);
             }
+
+            // N / P: step through generated levels (only on the key press, not while held)
+            bool nDown = glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS;
+            bool pDown = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
+            if (!replaying && ((nDown && !nWasDown) || (pDown && !pWasDown))) {
+                if (choice.generated) {
+                    choice.seed += nDown ? 1 : -1;
+                } else {
+                    choice.generated = true;   // from the test level, start at seed 0
+                }
+                world.load(buildLevel(choice));
+                std::cout << "Level '" << describe(choice) << "'\n";
+            }
+            nWasDown = nDown;
+            pWasDown = pDown;
 
             ShipInput keyboard = readKeyboard(window);
             while (accumulator >= constants::SIM_DT) {

@@ -5,8 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # The simulation: no window, no OpenGL. Shared by the game and the Python DLL.
-add_library(outerworld_core STATIC src/Ship.cpp src/World.cpp)
+add_library(outerworld_core STATIC src/Ship.cpp src/World.cpp src/LevelGen.cpp src/DistanceField.cpp)
 target_include_directories(outerworld_core PUBLIC include src)
+# Training runs the simulation millions of times, so it's always optimized, even in a debug build
+target_compile_options(outerworld_core PRIVATE -O2)
 
 # The game / viewer
 add_executable(outerworld src/main.cpp src/glad.c src/Shader.cpp src/Mesh.cpp)

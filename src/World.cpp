@@ -12,6 +12,7 @@ World::World(const Level& level) {
 
 void World::load(const Level& newLevel) {
     level = newLevel;
+    distanceFieldBuilt = false;
     reset();
 }
 
@@ -58,6 +59,28 @@ float World::goalDistance() const {
     glm::vec2 pos = ship.getPosition();
     glm::vec2 closest = glm::clamp(pos, level.goal.position - level.goal.halfSize, level.goal.position + level.goal.halfSize);
     return glm::distance(pos, closest);
+}
+
+float World::pathDistance() const {
+    float straight = goalDistance();
+    if (straight <= 0.0f) {
+        return 0.0f;   // inside the goal
+    }
+    float field = getDistanceField().distanceAt(ship.getPosition());
+    if (field < 0.0f) {
+        // No reachable cell nearby (the ship is inside an obstacle or past the edge, so about to crash).
+        // The field measures to the goal grown by the ship's radius, so do the same here to match it.
+        return std::max(0.0f, straight - constants::SHIP_RADIUS);
+    }
+    return field;
+}
+
+const DistanceField& World::getDistanceField() const {
+    if (!distanceFieldBuilt) {
+        distanceField.build(level);
+        distanceFieldBuilt = true;
+    }
+    return distanceField;
 }
 
 // Rotates a world-space vector into the ship's frame: x = to the ship's right, y = forward.

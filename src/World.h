@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include "constants.h"
+#include "DistanceField.h"
 #include "Level.h"
 #include "Ship.h"
 
@@ -35,9 +36,11 @@ public:
     StepResult step(const ShipInput& input);
     Observation observe() const;
     float goalDistance() const;   // straight-line distance from the ship to the nearest point of the goal
+    float pathDistance() const;   // travel distance from the ship to the goal, going around obstacles
 
     const Ship& getShip() const { return ship; }
     const Level& getLevel() const { return level; }
+    const DistanceField& getDistanceField() const;
     int getStepCount() const { return stepCount; }
 
 private:
@@ -47,6 +50,10 @@ private:
     glm::vec2 toShipFrame(glm::vec2 v) const;
 
     Level level;
+    // Built the first time pathDistance() needs it (about 2 ms), so runs that only use the
+    // straight-line distance don't pay for it on every load().
+    mutable DistanceField distanceField;
+    mutable bool distanceFieldBuilt = false;
     Ship ship;
     int stepCount = 0;
 };

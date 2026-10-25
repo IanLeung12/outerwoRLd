@@ -19,6 +19,8 @@ OW_API OwWorld* ow_create(void);              // starts on the test level
 OW_API void ow_destroy(OwWorld* world);
 
 OW_API void ow_load_test_level(OwWorld* world);
+// A random level from the generator. difficulty: 0 = easy .. 1 = hard.
+OW_API void ow_load_generated(OwWorld* world, unsigned int seed, float difficulty);
 OW_API void ow_reset(OwWorld* world);
 
 // Advances one fixed timestep. action is 0..ow_num_actions()-1.
@@ -26,7 +28,8 @@ OW_API void ow_reset(OwWorld* world);
 OW_API int ow_step(OwWorld* world, int action);
 
 OW_API void ow_observe(const OwWorld* world, float* out);   // writes ow_obs_size() floats
-OW_API float ow_goal_distance(const OwWorld* world);
+OW_API float ow_goal_distance(const OwWorld* world);   // straight line to the goal
+OW_API float ow_path_distance(const OwWorld* world);   // travel distance around obstacles
 OW_API int ow_step_count(const OwWorld* world);
 
 #ifdef __cplusplus

@@ -1,4 +1,5 @@
 #include "capi.h"
+#include "LevelGen.h"
 #include "World.h"
 #include <algorithm>
 
@@ -26,6 +27,10 @@ void ow_load_test_level(OwWorld* w) {
     w->world.load(makeTestLevel());
 }
 
+void ow_load_generated(OwWorld* w, unsigned int seed, float difficulty) {
+    w->world.load(generateLevel(seed, paramsForDifficulty(difficulty)));
+}
+
 void ow_reset(OwWorld* w) {
     w->world.reset();
 }
@@ -47,6 +52,10 @@ void ow_observe(const OwWorld* w, float* out) {
 
 float ow_goal_distance(const OwWorld* w) {
     return w->world.goalDistance();
+}
+
+float ow_path_distance(const OwWorld* w) {
+    return w->world.pathDistance();
 }
 
 int ow_step_count(const OwWorld* w) {
