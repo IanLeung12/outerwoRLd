@@ -9,7 +9,7 @@ struct ShipInput {
 
 class Ship {
 public:
-    void update(float dt, const ShipInput& input);
+    void update(float dt, const ShipInput& input, glm::vec2 forces);
     glm::mat4 modelMatrix() const;
     void reset();
     glm::vec2 getPosition() const;

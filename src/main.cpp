@@ -36,13 +36,15 @@ int main() {
 
         Mesh circleMesh(Mesh::makeCircle(1.0f, 12));
 
+        Mesh ringMesh(Mesh::makeCircle(1.0f, 24));
+
         Mesh goalMesh(Mesh::makeRect());
 
         std::vector<Obstacle> obstacles = {
-            {{ 0.8f,  0.4f}, 0.15f},
-            {{-0.9f, -0.5f}, 0.25f},
-            {{-0.6f,  0.6f}, 0.10f},
-            {{ 1.2f, -0.3f}, 0.20f},
+            {{ 0.8f,  0.4f}, 0.15f, constants::PLANET_DENSITY},
+            {{-0.9f, -0.5f}, 0.25f, constants::PLANET_DENSITY},
+            {{-0.6f,  0.6f}, 0.10f, constants::PLANET_DENSITY},
+            {{ 1.2f, -0.3f}, 0.20f, constants::PLANET_DENSITY},
         };
 
         const char* vertexSrc = R"(
@@ -96,14 +98,14 @@ int main() {
             if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
                 shipinput.turnRight = true;
             }
-            ship.update(dt, shipinput);
+            ship.update(dt, shipinput, Obstacle::gravityAt(ship.getPosition(), obstacles));
 
             if (std::abs(ship.getPosition().x) > aspect - constants::SHIP_RADIUS) {
                 ship.reset();
             } else if (std::abs(ship.getPosition().y) > 1.0f - constants::SHIP_RADIUS) {
                 ship.reset();
             }
-            
+
             for (const auto& obstacle: obstacles) {
                 if (circlesOverlap(ship.getPosition(), constants::SHIP_RADIUS, obstacle.position, obstacle.radius)) {
                     ship.reset();
@@ -129,6 +131,15 @@ int main() {
             for (const Obstacle& o : obstacles) {
                 shader.setMat4("uTransform", projection * o.modelMatrix());
                 circleMesh.draw(GL_LINE_LOOP);
+            }
+
+            shader.setVec4("uColor", constants::COLOR_GRAVITY);
+            for (const Obstacle& o : obstacles) {
+                if (o.density > 0) {
+                    glm::mat4 ring = glm::scale(o.modelMatrix(), glm::vec3(constants::GRAVITY_RANGE, constants::GRAVITY_RANGE, 1.0f));
+                    shader.setMat4("uTransform", projection * ring);
+                    ringMesh.draw(GL_LINE_LOOP);
+                }
             }
             
             shader.setVec4("uColor", constants::COLOR_GOAL);

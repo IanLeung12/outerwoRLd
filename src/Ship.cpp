@@ -4,7 +4,7 @@
 #include <cmath>
 #include <numbers>
 
-void Ship::update(float dt, const ShipInput& input) {
+void Ship::update(float dt, const ShipInput& input, glm::vec2 forces) {
     if (input.thrust) {
         glm::vec2 forward = glm::vec2(-sin(angle), cos(angle));
         velocity.x += forward.x * constants::SHIP_THRUST * dt;
@@ -16,7 +16,7 @@ void Ship::update(float dt, const ShipInput& input) {
     if (input.turnRight) {
         angle -= constants::SHIP_TURN_SPEED * dt;
     }
-    
+    velocity += forces;
     velocity *= std::pow(constants::SHIP_DRAG, dt);
     position.x += velocity.x * dt;
     position.y += velocity.y * dt;
