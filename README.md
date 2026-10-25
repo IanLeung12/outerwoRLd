@@ -1,5 +1,7 @@
 # Outerworld
 
+<img width="740" alt="Outerworld gameplay" src="docs/demo.gif" />
+
 A 2D space-flight physics game, and a reinforcement learning (RL) agent that learns to fly it. The ship thrusts and
 turns from a spawn point to a goal, past circular planets that destroy it on contact and pull it in with gravity.
 Levels are procedurally generated. The agent trains on one set of levels and is measured on a separate held-out set
