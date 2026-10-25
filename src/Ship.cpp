@@ -16,7 +16,7 @@ void Ship::update(float dt, const ShipInput& input, glm::vec2 forces) {
     if (input.turnRight) {
         angle -= constants::SHIP_TURN_SPEED * dt;
     }
-    velocity += forces;
+    velocity += forces * dt;
     velocity *= std::pow(constants::SHIP_DRAG, dt);
     position.x += velocity.x * dt;
     position.y += velocity.y * dt;
@@ -33,13 +33,22 @@ void Ship::reset() {
     position = spawnPoint;
     velocity.x = 0;
     velocity.y = 0;
-    angle = -0.5 * std::numbers::pi_v<float>;
+    angle = spawnAngle;
 }
 
 glm::vec2 Ship::getPosition() const {
     return position;
 }
 
-void Ship::setSpawn(glm::vec2 point) {
+glm::vec2 Ship::getVelocity() const {
+    return velocity;
+}
+
+float Ship::getAngle() const {
+    return angle;
+}
+
+void Ship::setSpawn(glm::vec2 point, float angle) {
     spawnPoint = point;
+    spawnAngle = angle;
 }

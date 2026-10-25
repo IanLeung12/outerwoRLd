@@ -4,14 +4,33 @@
 #include "constants.h"
 #include "Shader.h"
 #include "Mesh.h"
-#include "Ship.h"
-#include "Obstacle.h"
-#include "collision.h"
-#include "Goal.h"
+#include "World.h"
+#include <algorithm>
 #include <iostream>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
+
+// Shows the whole world, keeping its 16:9 shape whatever the window size (black bars if needed).
+static glm::mat4 fitWorldProjection(int w, int h) {
+    float windowAspect = (float)w / (float)h;
+    float worldAspect = constants::WORLD_HALF_WIDTH / constants::WORLD_HALF_HEIGHT;
+    float halfW = constants::WORLD_HALF_WIDTH;
+    float halfH = constants::WORLD_HALF_HEIGHT;
+    if (windowAspect > worldAspect) {
+        halfW = halfH * windowAspect;   // window is wider than the world
+    } else {
+        halfH = halfW / windowAspect;   // window is taller than the world
+    }
+    return glm::ortho(-halfW, halfW, -halfH, halfH, -1.0f, 1.0f);
+}
+
+static ShipInput readKeyboard(GLFWwindow* window) {
+    ShipInput input;
+    input.thrust = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
+    input.turnLeft = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
+    input.turnRight = glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
+    return input;
+}
 
 int main() {
     if (!glfwInit()) return -1;
@@ -38,14 +57,7 @@ int main() {
 
         Mesh ringMesh(Mesh::makeCircle(1.0f, 24));
 
-        Mesh goalMesh(Mesh::makeRect());
-
-        std::vector<Obstacle> obstacles = {
-            {{ 0.8f,  0.4f}, 0.15f, constants::PLANET_DENSITY},
-            {{-0.9f, -0.5f}, 0.25f, constants::PLANET_DENSITY},
-            {{-0.6f,  0.6f}, 0.10f, constants::PLANET_DENSITY},
-            {{ 1.2f, -0.3f}, 0.20f, constants::PLANET_DENSITY},
-        };
+        Mesh rectMesh(Mesh::makeRect());
 
         const char* vertexSrc = R"(
             #version 330 core
@@ -66,85 +78,73 @@ int main() {
             void main() {
                 FragColor = uColor;
             }
-            
+
         )";
 
-    
+
         Shader shader(vertexSrc, fragSrc);
 
-        Ship ship;
-        ship.setSpawn({-1.5f, 0.0f});
-        ship.reset();
-        
-        Goal goal{{1.6f, 0.0f}, {0.08f, 0.3f}};
+        World world(makeTestLevel());
+
+        // Fixed timestep: real time piles up in the accumulator, and the world advances
+        // in exact SIM_DT steps however fast or slow the screen refreshes.
         double lastTime = glfwGetTime();
+        double accumulator = 0.0;
         while(!glfwWindowShouldClose(window)) {
+            double now = glfwGetTime();
+            accumulator += std::min(now - lastTime, 0.25);   // cap, so a long freeze doesn't cause hundreds of catch-up steps
+            lastTime = now;
+
+            ShipInput input = readKeyboard(window);
+            while (accumulator >= constants::SIM_DT) {
+                StepResult result = world.step(input);
+                if (result == StepResult::ReachedGoal) {
+                    std::cout << "Level complete! (" << world.getStepCount() << " steps)\n";
+                }
+                if (result != StepResult::Running) {
+                    world.reset();
+                }
+                accumulator -= constants::SIM_DT;
+            }
+
             int w, h;
             glfwGetFramebufferSize(window, &w, &h);
             glViewport(0,0,w,h);
-            float aspect = (float)w / (float)h;
-            glm::mat4 projection = glm::ortho(-aspect, aspect, -1.0f, 1.0f, -1.0f, 1.0f);
+            glm::mat4 projection = fitWorldProjection(w, h);
 
-            double now = glfwGetTime();
-            double dt = now - lastTime;
-            lastTime = now;
-            ShipInput shipinput;
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-                shipinput.thrust = true;
-            }
-            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-                shipinput.turnLeft = true;
-            }
-            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-                shipinput.turnRight = true;
-            }
-            ship.update(dt, shipinput, Obstacle::gravityAt(ship.getPosition(), obstacles));
-
-            if (std::abs(ship.getPosition().x) > aspect - constants::SHIP_RADIUS) {
-                ship.reset();
-            } else if (std::abs(ship.getPosition().y) > 1.0f - constants::SHIP_RADIUS) {
-                ship.reset();
-            }
-
-            for (const auto& obstacle: obstacles) {
-                if (circlesOverlap(ship.getPosition(), constants::SHIP_RADIUS, obstacle.position, obstacle.radius)) {
-                    ship.reset();
-                    break;
-                }
-            }
-            
-            if (circleRectOverlap(ship.getPosition(), constants::SHIP_RADIUS, goal.position, goal.halfSize)) {
-                std::cout << "Level complete!\n";
-                ship.reset();
-            }
-
-            glm::mat4 model(1.0f);
-            model = ship.modelMatrix();
+            const Level& level = world.getLevel();
 
             glClear(GL_COLOR_BUFFER_BIT);
             shader.use();
-            shader.setVec4("uColor", constants::COLOR_SHIP);
-            shader.setMat4("uTransform", projection * model);
-            shipMesh.draw(GL_LINE_LOOP);
-            
-            shader.setVec4("uColor", constants::COLOR_OBSTACLE);
-            for (const Obstacle& o : obstacles) {
-                shader.setMat4("uTransform", projection * o.modelMatrix());
-                circleMesh.draw(GL_LINE_LOOP);
-            }
 
             shader.setVec4("uColor", constants::COLOR_GRAVITY);
-            for (const Obstacle& o : obstacles) {
+            for (const Obstacle& o : level.obstacles) {
                 if (o.density > 0) {
                     glm::mat4 ring = glm::scale(o.modelMatrix(), glm::vec3(constants::GRAVITY_RANGE, constants::GRAVITY_RANGE, 1.0f));
                     shader.setMat4("uTransform", projection * ring);
                     ringMesh.draw(GL_LINE_LOOP);
                 }
             }
-            
+
+            shader.setVec4("uColor", constants::COLOR_OBSTACLE);
+            for (const Obstacle& o : level.obstacles) {
+                shader.setMat4("uTransform", projection * o.modelMatrix());
+                circleMesh.draw(GL_LINE_LOOP);
+            }
+
             shader.setVec4("uColor", constants::COLOR_GOAL);
-            shader.setMat4("uTransform", projection * goal.modelMatrix());
-            goalMesh.draw(GL_LINE_LOOP);
+            shader.setMat4("uTransform", projection * level.goal.modelMatrix());
+            rectMesh.draw(GL_LINE_LOOP);
+
+            // World boundary, so the edges that kill you are visible
+            glm::mat4 bounds = glm::scale(glm::mat4(1.0f), glm::vec3(constants::WORLD_HALF_WIDTH, constants::WORLD_HALF_HEIGHT, 1.0f));
+            shader.setVec4("uColor", constants::COLOR_BOUNDS);
+            shader.setMat4("uTransform", projection * bounds);
+            rectMesh.draw(GL_LINE_LOOP);
+
+            shader.setVec4("uColor", constants::COLOR_SHIP);
+            shader.setMat4("uTransform", projection * world.getShip().modelMatrix());
+            shipMesh.draw(GL_LINE_LOOP);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
