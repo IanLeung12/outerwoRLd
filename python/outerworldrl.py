@@ -4,14 +4,15 @@ import time
 import gymnasium as gym
 import numpy as np
 from outerworld_env import OuterworldEnv, EVAL_SEEDS
-from collections import Counter
+from collections import Counter, deque
 from torch.utils.tensorboard import SummaryWriter
 
-writer = SummaryWriter(f"runs/difficulty0_norm_ortho_{time.strftime('%m%d_%H%M')}")
+writer = SummaryWriter(f"runs/curriculum_path_{time.strftime('%m%d_%H%M')}")
+torch.set_num_threads(1)
+torch.distributions.Distribution.set_default_validate_args(False)
 
-
-env = OuterworldEnv(levels="generated", difficulty=0.0)
-eval_env = OuterworldEnv(levels="generated", difficulty=0.0, seed_range=EVAL_SEEDS)
+env = OuterworldEnv(levels="generated", difficulty=0.0, shaping="path")
+eval_env = OuterworldEnv(levels="generated", difficulty=0.0,  seed_range=EVAL_SEEDS)
 
 class RunningMeanStd:
     def __init__(self):
@@ -121,12 +122,10 @@ def evaluate(num_episodes=50):
                     break
     return successes / num_episodes, eval_counter
 
-num_iterations = 500
+num_iterations = 5
+l10_suc = deque(maxlen=10)
 for i in range(num_iterations):
-    frac = 1 - i / num_iterations
     train_counter = Counter()
-    for group in optimizer.param_groups:
-        group["lr"] = frac * 3e-4
     all_log_probs, all_advantages, all_targets, all_obs, all_actions, all_raw_obs, successes = [], [], [], [], [], [], []
     for j in range(25):
         log_probs, rewards, e_obs, obsf, terminated, actions, info, robs = run_episode()
@@ -201,18 +200,31 @@ for i in range(num_iterations):
             value_loss = np.mean(vlosses)
         if stop:
             break
-    
-    writer.add_scalar("train/success", sum(successes) / len(successes), i)
+
+    successpct = sum(successes) / len(successes)
+    writer.add_scalar("train/success", successpct, i)
     writer.add_scalar("loss/value", value_loss, i)
     writer.add_scalar("ppo/clip_frac", clip_frac, i)
     writer.add_scalar("train/crash", train_counter["crash"] / 25, i)
     writer.add_scalar("train/timeout", train_counter["timeout"] / 25, i)
-    print(f"iteration {i}: success {sum(successes) / len(successes):.0%}, value loss {value_loss:.2f}, clip frac {clip_frac:.2f}")
+    writer.add_scalar("curriculum/difficulty", env.difficulty, i)
+    print(f"iteration {i}: success {successpct:.0%}, value loss {value_loss:.2f}, clip frac {clip_frac:.2f}")
     if i % 10 == 0:
         eval_success, eval_outcomes = evaluate()
         print(f"  eval success: {eval_success:.0%}")
         writer.add_scalar("eval/success", eval_success, i)
         writer.add_scalar("eval/crash", eval_outcomes["crash"] / 50, i)
-
+    if i%50 == 0:
+        torch.save({
+            "policy": policy.state_dict(),
+            "value_net": value_net.state_dict(),
+            "obs_mean": obs_rms.mean, "obs_var": obs_rms.var, "obs_count": obs_rms.count,
+            "iteration": i,
+        }, f"{writer.log_dir}/latest.pt")
+    l10_suc.append(successpct)
+    if len(l10_suc) == l10_suc.maxlen and np.mean(l10_suc) > 0.8:
+        env.difficulty = min(env.difficulty + 0.05, 1.0)
+        eval_env.difficulty = env.difficulty
+        l10_suc.clear()
     env.save_replay("runs/latest.txt")
 
