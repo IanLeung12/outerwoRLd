@@ -3,6 +3,8 @@
 #include <GLFW/glfw3.h>
 #include "constants.h"
 #include "Shader.h"
+#include "Mesh.h"
+#include "Ship.h"
 #include <cmath>
 #include <iostream>
 #include <glm/glm.hpp>
@@ -22,71 +24,55 @@ int main() {
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {glfwTerminate(); return -1;}
     glClearColor(0,0,0,1);
 
-    unsigned int vao;
-    unsigned int vbo;
-    float vertices[3][3] = {{0.03,-0.05,0}, {0,0.05,0}, {-0.03,-0.05,0}};
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    
-    const char* vertexSrc = R"(
-        #version 330 core
-        layout (location = 0) in vec3 aPos;
-        uniform mat4 uTransform;
-
-        void main() {
-            gl_Position = uTransform * vec4(aPos, 1.0);
-
-        }
-    )";
-
-    const char* fragSrc = R"(
-        #version 330 core
-        out vec4 FragColor;
-
-        void main() {
-            FragColor = vec4(1.0,0.4,0.4,1.0);
-        }
-        
-    )";
-
     {
+        std::vector<float> vertices = {
+            0.03f, -0.05f, 0.0f,
+            0.0f,   0.05f, 0.0f,
+            -0.03f, -0.05f, 0.0f,
+        };
+        Mesh shipMesh(vertices);
+
+        const char* vertexSrc = R"(
+            #version 330 core
+            layout (location = 0) in vec3 aPos;
+            uniform mat4 uTransform;
+
+            void main() {
+                gl_Position = uTransform * vec4(aPos, 1.0);
+
+            }
+        )";
+
+        const char* fragSrc = R"(
+            #version 330 core
+            out vec4 FragColor;
+
+            void main() {
+                FragColor = vec4(1.0,0.4,0.4,1.0);
+            }
+            
+        )";
+
+    
         Shader shader(vertexSrc, fragSrc);
 
-        double x = 0.0;
-        double y = 0.0;
-        double vx = 0.0;
-        double vy = 0.0;
-        float angle = 0.0f;
+        Ship ship;
         double lastTime = glfwGetTime();
         while(!glfwWindowShouldClose(window)) {
             double now = glfwGetTime();
             double dt = now - lastTime;
             lastTime = now;
+            ShipInput shipinput;
             if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-                glm::vec2 forward = glm::vec2(-sin(angle), cos(angle));
-                vx += forward.x * constants::SHIP_THRUST * dt;
-                vy += forward.y * constants::SHIP_THRUST * dt;
+                shipinput.thrust = true;
             }
             if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-                angle += constants::SHIP_TURN_SPEED * dt;
+                shipinput.turnLeft = true;
             }
             if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-                angle -= constants::SHIP_TURN_SPEED * dt;
+                shipinput.turnRight = true;
             }
-            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-                vx = 0;
-                vy = 0;
-            }
-            double dragFactor = std::pow(constants::SHIP_DRAG, dt);
-            vx *= dragFactor;
-            vy *= dragFactor;
-            x += vx * dt;
-            y += vy * dt;
+            ship.update(dt, shipinput);
             
             int w, h;
             glfwGetFramebufferSize(window, &w, &h);
@@ -95,14 +81,12 @@ int main() {
             glm::mat4 projection = glm::ortho(-aspect, aspect, -1.0f, 1.0f, -1.0f, 1.0f);
 
             glm::mat4 model(1.0f);
-            model = glm::translate(model, glm::vec3(x, y, 0.0));
-            model = glm::rotate(model, angle, glm::vec3(0,0,1));
+            model = ship.modelMatrix();
 
             glClear(GL_COLOR_BUFFER_BIT);
             shader.use();
             shader.setMat4("uTransform", projection * model);
-            glBindVertexArray(vao);
-            glDrawArrays(GL_LINE_LOOP, 0, 3);
+            shipMesh.draw(GL_LINE_LOOP);
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
