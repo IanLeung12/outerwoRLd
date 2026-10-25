@@ -54,6 +54,12 @@ bool World::reachedGoal() const {
     return circleRectOverlap(ship.getPosition(), constants::SHIP_RADIUS, level.goal.position, level.goal.halfSize);
 }
 
+float World::goalDistance() const {
+    glm::vec2 pos = ship.getPosition();
+    glm::vec2 closest = glm::clamp(pos, level.goal.position - level.goal.halfSize, level.goal.position + level.goal.halfSize);
+    return glm::distance(pos, closest);
+}
+
 // Rotates a world-space vector into the ship's frame: x = to the ship's right, y = forward.
 glm::vec2 World::toShipFrame(glm::vec2 v) const {
     float a = ship.getAngle();

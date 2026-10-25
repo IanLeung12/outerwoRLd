@@ -4,12 +4,23 @@ project(outerworld LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(outerworld src/main.cpp src/glad.c src/Shader.cpp src/Mesh.cpp src/Ship.cpp src/World.cpp)
+# The simulation: no window, no OpenGL. Shared by the game and the Python DLL.
+add_library(outerworld_core STATIC src/Ship.cpp src/World.cpp)
+target_include_directories(outerworld_core PUBLIC include src)
 
-target_include_directories(outerworld PRIVATE include)
+# The game / viewer
+add_executable(outerworld src/main.cpp src/glad.c src/Shader.cpp src/Mesh.cpp)
 
 target_link_libraries(outerworld PRIVATE
+    outerworld_core
     ${CMAKE_SOURCE_DIR}/lib/libglfw3.a
     opengl32
     gdi32
 )
+
+# The DLL that Python loads (python/outerworld_env.py). Linked statically so it
+# doesn't need MinGW's runtime DLLs next to it.
+add_library(outerworld_py SHARED src/capi.cpp)
+target_link_libraries(outerworld_py PRIVATE outerworld_core)
+target_link_options(outerworld_py PRIVATE -static)
+set_target_properties(outerworld_py PROPERTIES PREFIX "")

@@ -138,3 +138,10 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# python
+__pycache__/
+*.pyc
+
+# training output (tensorboard logs, checkpoints, replays)
+runs/

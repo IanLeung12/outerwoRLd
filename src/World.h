@@ -34,6 +34,7 @@ public:
 
     StepResult step(const ShipInput& input);
     Observation observe() const;
+    float goalDistance() const;   // straight-line distance from the ship to the nearest point of the goal
 
     const Ship& getShip() const { return ship; }
     const Level& getLevel() const { return level; }

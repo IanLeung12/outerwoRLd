@@ -6,7 +6,10 @@
 #include "Mesh.h"
 #include "World.h"
 #include <algorithm>
+#include <fstream>
 #include <iostream>
+#include <string>
+#include <vector>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -32,7 +35,54 @@ static ShipInput readKeyboard(GLFWwindow* window) {
     return input;
 }
 
-int main() {
+// A recorded episode, saved by OuterworldEnv.save_replay() in Python. The simulation is
+// deterministic, so the level plus the list of actions recreates the episode exactly.
+struct Replay {
+    std::string level;
+    std::vector<int> actions;
+};
+
+static bool loadReplay(const char* path, Replay& replay) {
+    std::ifstream file(path);
+    std::string keyword;
+    if (!(file >> keyword >> replay.level) || keyword != "level") {
+        std::cerr << "Couldn't read replay " << path << "\n";
+        return false;
+    }
+    int action;
+    while (file >> action) {
+        if (action < 0 || action >= NUM_ACTIONS) {
+            std::cerr << "Invalid action " << action << " in replay\n";
+            return false;
+        }
+        replay.actions.push_back(action);
+    }
+    if (replay.actions.empty()) {
+        std::cerr << "Replay " << path << " has no actions\n";
+        return false;
+    }
+    return true;
+}
+
+static bool levelByName(const std::string& name, Level& level) {
+    if (name == "test") {
+        level = makeTestLevel();
+        return true;
+    }
+    std::cerr << "Unknown level '" << name << "'\n";
+    return false;
+}
+
+int main(int argc, char** argv) {
+    // Usage: outerworld                    play with the keyboard (W thrust, A/D turn, Esc quit)
+    //        outerworld --replay <file>    watch a recorded episode, on a loop
+    bool replaying = argc >= 3 && std::string(argv[1]) == "--replay";
+    Replay replay;
+    Level startLevel = makeTestLevel();
+    if (replaying && (!loadReplay(argv[2], replay) || !levelByName(replay.level, startLevel))) {
+        return 1;
+    }
+
     if (!glfwInit()) return -1;
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -84,7 +134,11 @@ int main() {
 
         Shader shader(vertexSrc, fragSrc);
 
-        World world(makeTestLevel());
+        World world(startLevel);
+        size_t replayIndex = 0;
+        if (replaying) {
+            std::cout << "Replaying " << replay.actions.size() << " steps on level '" << replay.level << "'\n";
+        }
 
         // Fixed timestep: real time piles up in the accumulator, and the world advances
         // in exact SIM_DT steps however fast or slow the screen refreshes.
@@ -95,14 +149,29 @@ int main() {
             accumulator += std::min(now - lastTime, 0.25);   // cap, so a long freeze doesn't cause hundreds of catch-up steps
             lastTime = now;
 
-            ShipInput input = readKeyboard(window);
+            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                glfwSetWindowShouldClose(window, true);
+            }
+
+            ShipInput keyboard = readKeyboard(window);
             while (accumulator >= constants::SIM_DT) {
-                StepResult result = world.step(input);
+                bool replayFinished = replaying && replayIndex >= replay.actions.size();
+                StepResult result = StepResult::Running;
+                if (!replayFinished) {
+                    ShipInput input = replaying ? decodeAction(replay.actions[replayIndex++]) : keyboard;
+                    result = world.step(input);
+                }
+
                 if (result == StepResult::ReachedGoal) {
                     std::cout << "Level complete! (" << world.getStepCount() << " steps)\n";
+                } else if (result == StepResult::Crashed && replaying) {
+                    std::cout << "Crashed after " << world.getStepCount() << " steps\n";
+                } else if (replayFinished) {
+                    std::cout << "Timed out after " << world.getStepCount() << " steps\n";
                 }
-                if (result != StepResult::Running) {
+                if (result != StepResult::Running || replayFinished) {
                     world.reset();
+                    replayIndex = 0;   // replays loop
                 }
                 accumulator -= constants::SIM_DT;
             }
