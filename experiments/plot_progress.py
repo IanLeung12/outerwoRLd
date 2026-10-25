@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt   # noqa: E402
 
 STEPS = [   # label, runs (averaged over the seeds that exist)
-    ("Before (your setup)", ["r1_baseline"]),
+    ("Baseline", ["r1_baseline"]),
     ("+ repeat 4, blocker levels, rays", ["r3_rep4_rays16_mix50_d0", "r3_combo_seed1"]),
     ("+ no observation normalization", ["r4_combo_nonorm", "r4_combo_nonorm_seed1"]),
     ("+ repeat 8, Deep Sets", ["r10_ds_rep8", "r10_ds_rep8_seed1"]),
