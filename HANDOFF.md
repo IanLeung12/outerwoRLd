@@ -1,12 +1,14 @@
 # Outerworld: session handoff
 
-Written 2026-10-25. Read this first; it replaces the earlier conversation.
+Written 2026-10-25, updated after the overnight experiments (2026-10-25 ~11:30). Read this first; it replaces the earlier
+conversation. **Then read `experiments/REPORT.md`** (what changed overnight and why).
 
 ## The user and how to work with them
 
 - Started this project to **learn C++, OpenGL and then reinforcement learning** from scratch. Experienced enough now to write PPO themselves; new to C++ and ML before this project.
 - Original rule: *"only write code I tell you to write."* Over time they handed over **infrastructure** (C++ simulation, C API, Python env, generators, tooling), and asked me to do some bigger edits directly. For **RL algorithm code** they want to *understand*: explain ideas, give scaffolding or stubs when asked, review their code and point out bugs (with the reason), rather than silently writing it.
 - When I make changes, they want **every change explained** afterwards.
+- For the overnight run they said: "feel free to touch the rl file i dont really care just when i get back i need explanations". `outerworldrl.py` was rewritten to the best setup; their old version is `experiments/backup/outerworldrl_before_overnight.py`.
 - Windows 11, PowerShell, VS Code with CMake Tools (F7 builds, Shift+F5 runs). Commits and pushes themselves (remote: `github.com/IanLeung12/outerworld`).
 
 ## Goal of the project
@@ -34,7 +36,8 @@ A 2D physics game: steer a ship (thrust and turn) from a spawn point to a goal, 
 - `LevelGen.h/.cpp`: `generateLevel(seed, GenParams)`, `paramsForDifficulty(0..1)`. Portable RNG (raw mt19937 → floats). Rejection sampling; ship-sized gaps between obstacles and from edges guarantee a route; spawn outside all gravity; limited gravity at the goal. Tested on 30k levels.
 - `DistanceField.h/.cpp`: 178×100 grid, Dijkstra from goal cells, bilinear lookup.
 - `constants.h`: all tuning values (world is ±16/9 × ±1; `SHIP_THRUST 2.0`, `SHIP_TURN_SPEED 3.5`, `SHIP_DRAG 0.75`, `SHIP_RADIUS 0.04`, `PLANET_DENSITY 12`, `GRAVITY_RANGE 3`, observation sizes and scales).
-- `capi.h/.cpp`: single-world `ow_*` functions and **batched `ow_batch_*`** functions (one call steps N worlds and writes results, step counts, shaping distances and observations into caller arrays).
+- `capi.h/.cpp`: single-world `ow_*` functions and **batched `ow_batch_*`** functions (one call steps N worlds and writes results, step counts, shaping distances and observations into caller arrays). Overnight additions: `ow_batch_load_generated_ex` (blocker chance), `ow_batch_step_repeat` (action repeat), `ow_batch_rays` (lidar).
+- `GenParams::blockerChance` (LevelGen): chance of a planet across the spawn-goal line; 0 draws no extra random numbers, so existing seeds are unchanged. Viewer: `--blocker <chance>`, replay lines may carry a 4th number.
 
 **Game / viewer (`outerworld.exe`): `main.cpp`, `Shader`, `Mesh`, GLFW + GLAD + GLM.**
 - Keyboard play of the test level: W thrust, A/D turn, Esc quit, **N/P = next/previous generated level**.
@@ -45,34 +48,46 @@ A 2D physics game: steer a ship (thrust and turn) from a spawn point to a goal, 
 
 **Python, `python/outerworld_env.py`:**
 - `OuterworldEnv` (Gymnasium env, single world) and **`OuterworldVecEnv(num_envs, …)`** (batched, same options, same-step auto-reset; `info["final_obs"]` holds the real last observation of finished episodes; `info["episodes"]` lists finished episodes with result/is_success/level/length/return). The batched env was tested to be identical to the single env.
-- Options: `levels="test"|"generated"`, `difficulty` (changeable between episodes), `seed_range` (`TRAIN_SEEDS = (0, 1e6)`, `EVAL_SEEDS = (1e9, 1e9+1e6)`), `shaping="straight"|"path"|"none"`, `max_steps=1200`.
+- Options: `levels="test"|"generated"`, `difficulty` (changeable between episodes), `seed_range` (`TRAIN_SEEDS = (0, 1e6)`, `EVAL_SEEDS = (1e9, 1e9+1e6)`), `shaping="straight"|"path"|"none"`, `max_steps=1200`. `OuterworldVecEnv` also: `action_repeat`, `blocker_chance`, `rays`, `ray_range` (obs_size = 54 + rays).
 - Reward: +10 goal, −5 crash, `+1 × (previous distance − current distance)` progress shaping, timeout = truncated.
 - The DLL path is `$OUTERWORLD_DLL` or `<repo>/build/outerworld_py.dll`.
 
-**Training, `python/outerworldrl.py` (the user's own PPO, written over the sessions):**
-- Batched collection: 32 worlds × 128 steps = 4096 steps per iteration; timeouts bootstrapped by adding `γ·V(final_obs)` to the reward; vectorized GAE (γ 0.99, λ 0.95) with a done mask.
-- PPO: clip 0.2, 10 epochs, minibatch 64, entropy 0.01, grad clip 0.5, KL early stop 0.02 (checked per minibatch), separate value net trained in the same minibatch loop, Adam 3e-4 (no LR annealing, because of the curriculum).
-- Running observation normalization (`RunningMeanStd`, statistics frozen during collection, updated once per iteration, never from eval); orthogonal init (√2 hidden, 0.01 policy head, 1.0 value head).
-- Curriculum: +0.05 difficulty when the 10-iteration average success > 80%. Eval every 10 iterations on 50 fixed `EVAL_SEEDS` levels with argmax. TensorBoard logging, `latest.pt` checkpoint every 50 iterations (in the run's log dir, includes the normalization statistics), replay of the latest episode in `runs/latest.txt`.
-- `python/learning/`: the user's earlier exercises (`fit_sine.py`, `reinforce_cartpole.py`). They built REINFORCE → baseline → GAE → PPO on CartPole step by step.
+**Training, `python/outerworldrl.py`** (the user's PPO, now with the overnight best setup): 64 worlds x 128 decisions,
+action repeat 8, 16 rays, blocker chance 0.5, curriculum from difficulty 0 (+0.05 when 10-iteration train success > 80%),
+**no observation normalization** (RunningMeanStd broke on never-varying features), **Deep Sets** policy and value nets
+(`PlanetSetNet`), PPO as before (clip 0.2, 10 epochs, minibatch 256, entropy 0.01, KL stop 0.02, gamma 0.99 and lambda 0.95
+per decision). Diagnostics: approx_kl, entropy, epochs, explained variance, blocked/clear eval split.
+
+**Experiments, `experiments/`:** `train.py` (same PPO, every setting a flag, results.json), `summarize.py`, `analyze.py`
+(success by level feature, wall vs planet crashes), `replay.py`, `models.py`, `plot_progress.py`, `NOTES.md` (full log),
+`REPORT.md`. Runs in `runs/exp/<name>/`.
+- `python/learning/`: the user's earlier exercises (`fit_sine.py`, `reinforce_cartpole.py`).
 
 ## Results so far
 
-- Random agent success by difficulty: 0.0 → 29.5%, 0.25 → 6%, 0.5 → 1%, 1.0 → 0.5%.
-- PPO on the fixed test level: 100% by iteration 20 (memorized, value loss → 0).
-- **Generated levels at difficulty 0 (single-env version): eval success on unseen levels tracked training success, reaching 80–95%.** It generalizes rather than memorizes, which is the project's key question answered for easy levels. A dip around iteration 100 was not fully explained.
-- Batched version, quick 12-iteration check: eval 10% → 46% by iteration 10. Collection now takes about 0.25 s per 4096 steps; **the PPO update (~2.5 s per iteration) is now the bottleneck**.
+- Before overnight: the agent couldn't fly around planets (credit horizon), and held-out success was 67/41/23/8/4/3% at
+  difficulty 0/0.2/0.4/0.6/0.8/1.0.
+- After: best agent (`runs/exp/r16_ds_rep8_envs64_long/final.pt`, 2000 its) 98/96/96/95/94/93%; 600-iteration runs of
+  the final setup 96-98% ... 83-90%. `python/outerworldrl.py` as is, 2000 its (`runs/exp/r25_user_script_long/latest.pt`):
+  96/100/98/96/96/96%, 94% on 1000 levels at 1.0 with no deadlocks. LR annealing (`train.py --anneal-lr`)
+  adds ~1-2 points (95% at 1.0). The last ~5% failures are agent-specific (only 1% of levels beat every agent), so
+  an ensemble of 2 agents (`analyze.py --ensemble`) reaches 97% at 1.0. See REPORT.md "After the report".
+  Distilling that ensemble into one net (`experiments/distill.py`) gives `runs/exp/d1_ens2_init/final.pt`:
+  96% at 1.0, 99% at 0.5, the best single policy. Held-out = training-level success (no memorization). Zero-shot on 9-12 planets: 83%/69%.
+- Things that didn't matter: lambda, KL-stop mode, network size, shaping type (even none is close), entropy, lr,
+  pooling type, rays (once Deep Sets is in). Details and numbers: `experiments/REPORT.md`.
+- Known minor issue: greedy-policy deadlock (ship never moves) on ~1% of hard levels; step penalty / terminal timeouts
+  didn't help overall.
 
-## State at handoff
+## State at handoff (after overnight)
 
-- **Uncommitted:** `src/capi.h`, `src/capi.cpp` (batched API), `python/outerworld_env.py` (`OuterworldVecEnv`), `python/outerworldrl.py` (batched training loop), and this file.
-- **`build/outerworld_py.dll` predates the batched API.** The user must rebuild (F7) before running `outerworldrl.py`, otherwise loading fails on `ow_batch_create`.
-- The previous curriculum run (single-env version) may still have been running.
+- **Uncommitted:** C++ (`LevelGen`, `capi`, `main.cpp`), `python/outerworld_env.py`, `python/outerworldrl.py`,
+  `experiments/`, this file. The user commits themselves.
+- **`build/` predates the overnight C++ changes: press F7 before running anything.** Overnight runs used scratch
+  builds via `OUTERWORLD_DLL`.
 
-## Suggested next steps (in roughly this order)
+## Suggested next steps
 
-1. Rebuild, then run the batched curriculum training and check the `curriculum/difficulty`, `eval/success`, and `train/crash` vs `train/timeout` graphs.
-2. **Speed up the update:** try `minibatch_size = 256` (about 4× fewer updates), comparing eval curves; then test CUDA for the update phase.
-3. Experiments the user wants to run, **one change at a time**: shaping straight vs path vs none at difficulty ~0.5; network size 64 vs 128 vs 256 where the agent struggles.
-4. Smaller PPO refinements discussed but not done: average the KL over each epoch instead of per minibatch; a `best.pt` checkpoint on eval improvement; `eval/timeout` logging; value LR schedule.
-5. Bigger ideas discussed for later: attention/Deep Sets over obstacles, behaviour cloning from the user's own play (the replay format already records actions), DQN and HER, action repeat.
+See the end of `experiments/REPORT.md`: re-implement the changes to understand them, train with more obstacle slots
+(separate the generator's max planet count from `OBS_MAX_OBSTACLES` first), attention over planets, randomized physics,
+behaviour cloning from the user's play, DQN as an exercise.

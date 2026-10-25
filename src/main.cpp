@@ -39,20 +39,26 @@ static ShipInput readKeyboard(GLFWwindow* window) {
 }
 
 // Which level to play: the hand-made test level, or a generated one. Written in replays as
-// "test" or "generated <seed> <difficulty>".
+// "test" or "generated <seed> <difficulty> [<blocker chance>]".
 struct LevelChoice {
     bool generated = false;
     uint32_t seed = 0;
     float difficulty = 0.5f;
+    float blockerChance = 0.0f;
 };
 
 static Level buildLevel(const LevelChoice& choice) {
-    return choice.generated ? generateLevel(choice.seed, paramsForDifficulty(choice.difficulty)) : makeTestLevel();
+    if (!choice.generated) return makeTestLevel();
+    GenParams params = paramsForDifficulty(choice.difficulty);
+    params.blockerChance = choice.blockerChance;
+    return generateLevel(choice.seed, params);
 }
 
 static std::string describe(const LevelChoice& choice) {
     if (!choice.generated) return "test";
-    return "generated " + std::to_string(choice.seed) + " " + std::to_string(choice.difficulty);
+    std::string text = "generated " + std::to_string(choice.seed) + " " + std::to_string(choice.difficulty);
+    if (choice.blockerChance > 0.0f) text += " " + std::to_string(choice.blockerChance);
+    return text;
 }
 
 static bool parseLevel(std::istream& in, LevelChoice& choice) {
@@ -64,6 +70,7 @@ static bool parseLevel(std::istream& in, LevelChoice& choice) {
     }
     if (name == "generated" && in >> choice.seed >> choice.difficulty) {
         choice.generated = true;
+        if (!(in >> choice.blockerChance)) choice.blockerChance = 0.0f;   // optional
         return true;
     }
     std::cerr << "Unknown level '" << name << "'\n";
@@ -104,6 +111,7 @@ static bool loadReplay(const char* path, Replay& replay) {
 int main(int argc, char** argv) {
     // Usage: outerworld                              play the test level (W thrust, A/D turn, Esc quit)
     //        outerworld --seed <n> [--difficulty <d>]  play a generated level (default difficulty 0.5)
+    //                   [--blocker <chance>]           ... with a planet in the way (chance 0..1)
     //        outerworld --replay <file>              watch a recorded episode, on a loop
     // While playing, N / P switch to the next / previous generated level.
     bool replaying = false;
@@ -120,6 +128,8 @@ int main(int argc, char** argv) {
             choice.seed = (uint32_t)std::stoul(argv[i + 1]);
         } else if (flag == "--difficulty") {
             choice.difficulty = std::stof(argv[i + 1]);
+        } else if (flag == "--blocker") {
+            choice.blockerChance = std::stof(argv[i + 1]);
         } else {
             std::cerr << "Unknown option " << flag << "\n";
             return 1;

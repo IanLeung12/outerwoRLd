@@ -42,6 +42,9 @@ OW_API void ow_batch_destroy(OwBatch* batch);
 
 OW_API void ow_batch_load_test_level(OwBatch* batch, int index);
 OW_API void ow_batch_load_generated(OwBatch* batch, int index, unsigned int seed, float difficulty);
+// Same, plus the chance of a "blocker" planet on the spawn-goal line (GenParams::blockerChance).
+OW_API void ow_batch_load_generated_ex(OwBatch* batch, int index, unsigned int seed, float difficulty,
+                                       float blocker_chance);
 
 // Advances every world one fixed timestep. shaping chooses which distance is written:
 // 0 = straight line, 1 = path around obstacles, 2 = none (writes 0).
@@ -49,6 +52,17 @@ OW_API void ow_batch_load_generated(OwBatch* batch, int index, unsigned int seed
 // num_worlds * ow_obs_size() observations, all taken after the step.
 OW_API void ow_batch_step(OwBatch* batch, const int* actions, int shaping,
                           int* results, int* step_counts, float* distances, float* observations);
+
+// Same, but each world repeats its action for up to `repeat` timesteps, stopping early if
+// its episode ends (crash or goal). Step counts are in timesteps, not decisions.
+OW_API void ow_batch_step_repeat(OwBatch* batch, const int* actions, int repeat, int shaping,
+                                 int* results, int* step_counts, float* distances, float* observations);
+
+// "Lidar": for every world, num_rays distances from the ship to the first thing it would crash into
+// (a planet or the world edge), along directions evenly spread around the ship starting straight ahead
+// and going clockwise (towards the ship's right). Each is divided by max_range and capped at 1, so
+// 1 = nothing within range. Writes num_worlds * num_rays floats.
+OW_API void ow_batch_rays(const OwBatch* batch, int num_rays, float max_range, float* out);
 
 // One world's observation and distance, e.g. right after loading it a new level.
 OW_API void ow_batch_observe_one(const OwBatch* batch, int index, float* out);

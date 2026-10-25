@@ -2,6 +2,7 @@
 #include "LevelGen.h"
 #include "World.h"
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 struct OwWorld {
@@ -97,15 +98,70 @@ void ow_batch_load_generated(OwBatch* batch, int index, unsigned int seed, float
     batch->worlds[index].load(generateLevel(seed, paramsForDifficulty(difficulty)));
 }
 
+void ow_batch_load_generated_ex(OwBatch* batch, int index, unsigned int seed, float difficulty,
+                                float blocker_chance) {
+    GenParams params = paramsForDifficulty(difficulty);
+    params.blockerChance = blocker_chance;
+    batch->worlds[index].load(generateLevel(seed, params));
+}
+
 void ow_batch_step(OwBatch* batch, const int* actions, int shaping,
                    int* results, int* step_counts, float* distances, float* observations) {
+    ow_batch_step_repeat(batch, actions, 1, shaping, results, step_counts, distances, observations);
+}
+
+void ow_batch_step_repeat(OwBatch* batch, const int* actions, int repeat, int shaping,
+                          int* results, int* step_counts, float* distances, float* observations) {
     for (size_t i = 0; i < batch->worlds.size(); ++i) {
         World& world = batch->worlds[i];
-        results[i] = resultCode(world.step(decodeAction(actions[i])));
+        ShipInput input = decodeAction(actions[i]);
+        StepResult result = StepResult::Running;
+        for (int r = 0; r < repeat && result == StepResult::Running; ++r) {
+            result = world.step(input);
+        }
+        results[i] = resultCode(result);
         step_counts[i] = world.getStepCount();
         distances[i] = shapingDistance(world, shaping);
         Observation obs = world.observe();
         std::copy(obs.begin(), obs.end(), observations + i * constants::OBS_SIZE);
+    }
+}
+
+// How far the ship's centre can move from origin along the unit vector dir before it crashes.
+static float rayDistance(const Level& level, glm::vec2 origin, glm::vec2 dir, float maxRange) {
+    const float shipR = constants::SHIP_RADIUS;
+    float best = maxRange;
+    // World edges, moved in by the ship's radius (where outOfBounds() triggers)
+    glm::vec2 limit{constants::WORLD_HALF_WIDTH - shipR, constants::WORLD_HALF_HEIGHT - shipR};
+    for (int axis = 0; axis < 2; ++axis) {
+        if (dir[axis] > 1e-6f) best = std::min(best, (limit[axis] - origin[axis]) / dir[axis]);
+        if (dir[axis] < -1e-6f) best = std::min(best, (-limit[axis] - origin[axis]) / dir[axis]);
+    }
+    // Planets, grown by the ship's radius: solve |origin + t*dir - centre| = r for the first t >= 0
+    for (const auto& o : level.obstacles) {
+        glm::vec2 c = o.position - origin;
+        float r = o.radius + shipR;
+        float b = glm::dot(c, dir);
+        float disc = b * b - (glm::dot(c, c) - r * r);
+        if (disc < 0.0f) continue;   // the ray misses
+        float root = std::sqrt(disc);
+        if (b + root < 0.0f) continue;   // entirely behind
+        best = std::min(best, std::max(0.0f, b - root));   // 0 if already touching
+    }
+    return std::max(0.0f, best);
+}
+
+void ow_batch_rays(const OwBatch* batch, int num_rays, float max_range, float* out) {
+    for (size_t i = 0; i < batch->worlds.size(); ++i) {
+        const World& world = batch->worlds[i];
+        float a = world.getShip().getAngle();
+        glm::vec2 right{std::cos(a), std::sin(a)};
+        glm::vec2 forward{-std::sin(a), std::cos(a)};
+        for (int k = 0; k < num_rays; ++k) {
+            float theta = 2.0f * 3.14159265f * (float)k / (float)num_rays;
+            glm::vec2 dir = forward * std::cos(theta) + right * std::sin(theta);
+            out[i * num_rays + k] = rayDistance(world.getLevel(), world.getShip().getPosition(), dir, max_range) / max_range;
+        }
     }
 }
 

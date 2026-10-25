@@ -11,6 +11,7 @@ constexpr float GOAL_CLEARANCE = 0.2f;    // free space around the goal
 constexpr float EDGE_MARGIN = 0.15f;      // obstacles keep this far from the edges, so ships can pass along them
 constexpr float MAX_GOAL_PULL = 0.75f;    // gravity at the goal is kept below this fraction of thrust
 constexpr int ATTEMPTS_PER_OBSTACLE = 200;
+constexpr float BLOCKER_MIN_RADIUS = 0.12f;  // a blocker is at least 3x the ship's width
 
 // std::uniform_real_distribution gives different numbers on different compilers, so the raw
 // mt19937 output (which is the same everywhere) is turned into floats here instead.
@@ -136,6 +137,24 @@ Level generateLevel(uint32_t seed, const GenParams& params) {
     int count = rng.uniformInt(params.minObstacles, params.maxObstacles);
     glm::vec2 corridorDir = glm::normalize(toGoal);
     glm::vec2 corridorPerp{-corridorDir.y, corridorDir.x};
+
+    // Optionally a "blocker" first: a planet across the straight line from spawn to goal.
+    // Only draws random numbers when enabled, so levels with blockerChance 0 are unchanged.
+    if (params.blockerChance > 0.0f && rng.chance(params.blockerChance)) {
+        for (int attempt = 0; attempt < ATTEMPTS_PER_OBSTACLE; ++attempt) {
+            Obstacle o;
+            o.radius = rng.uniform(std::max(params.minRadius, BLOCKER_MIN_RADIUS), std::max(params.maxRadius, BLOCKER_MIN_RADIUS));
+            o.density = rng.chance(params.gravityChance) ? rng.uniform(params.minDensity, params.maxDensity) : 0.0f;
+            float along = rng.uniform(0.3f, 0.7f);
+            float across = rng.uniform(-0.5f, 0.5f) * o.radius;   // centre close enough to the line to block it
+            o.position = level.spawn + toGoal * along + corridorPerp * across;
+            if (obstacleFits(o, level, params)) {
+                level.obstacles.push_back(o);
+                break;
+            }
+        }
+        count = std::max(count, (int)level.obstacles.size());
+    }
     for (int attempt = 0; attempt < count * ATTEMPTS_PER_OBSTACLE && (int)level.obstacles.size() < count; ++attempt) {
         Obstacle o;
         o.radius = rng.uniform(params.minRadius, params.maxRadius);

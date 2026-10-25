@@ -60,8 +60,11 @@ def _load_dll():
     dll.ow_batch_destroy.argtypes = [batch_p]
     dll.ow_batch_load_test_level.argtypes = [batch_p, ctypes.c_int]
     dll.ow_batch_load_generated.argtypes = [batch_p, ctypes.c_int, ctypes.c_uint, ctypes.c_float]
+    dll.ow_batch_load_generated_ex.argtypes = [batch_p, ctypes.c_int, ctypes.c_uint, ctypes.c_float, ctypes.c_float]
     dll.ow_batch_step.argtypes = [batch_p, int_p, ctypes.c_int, int_p, int_p, float_p, float_p]
+    dll.ow_batch_step_repeat.argtypes = [batch_p, int_p, ctypes.c_int, ctypes.c_int, int_p, int_p, float_p, float_p]
     dll.ow_batch_observe_one.argtypes = [batch_p, ctypes.c_int, float_p]
+    dll.ow_batch_rays.argtypes = [batch_p, ctypes.c_int, ctypes.c_float, float_p]
     dll.ow_batch_distance_one.argtypes = [batch_p, ctypes.c_int, ctypes.c_int]
     dll.ow_batch_distance_one.restype = ctypes.c_float
     return dll
@@ -203,10 +206,20 @@ class OuterworldVecEnv:
 
     info["episodes"] lists the episodes that finished this step, each a dict with
     index, result ("goal", "crash" or "timeout"), is_success, level, length and return.
+
+    Extra options:
+        action_repeat:  each step() applies the actions for this many timesteps (an episode can
+                        still end part-way). Lengths and max_steps stay in timesteps.
+        blocker_chance: chance that a generated level gets a planet right across the straight
+                        line from spawn to goal (env.blocker_chance can be changed between episodes).
+        rays:           if > 0, this many "lidar" distances are appended to each observation
+                        (see ow_batch_rays: first planet or edge along evenly spaced directions,
+                        starting straight ahead, divided by ray_range and capped at 1).
     """
 
     def __init__(self, num_envs, max_steps=MAX_STEPS, levels="test", difficulty=0.5,
-                 seed_range=TRAIN_SEEDS, shaping="straight", seed=None):
+                 seed_range=TRAIN_SEEDS, shaping="straight", seed=None, action_repeat=1, blocker_chance=0.0,
+                 rays=0, ray_range=1.5):
         if levels not in ("test", "generated"):
             raise ValueError(f'levels must be "test" or "generated", not {levels!r}')
         if shaping not in _SHAPING_CODES:
@@ -217,13 +230,19 @@ class OuterworldVecEnv:
         self.difficulty = difficulty
         self.seed_range = seed_range
         self.shaping = shaping
-        self.obs_size = _dll.ow_obs_size()
+        self.action_repeat = action_repeat
+        self.blocker_chance = blocker_chance
+        self.rays = rays
+        self.ray_range = ray_range
+        self.base_obs_size = _dll.ow_obs_size()
+        self.obs_size = self.base_obs_size + rays
         self.num_actions = _dll.ow_num_actions()
         self.rng = np.random.default_rng(seed)
 
         self._batch = _dll.ow_batch_create(num_envs)
         # Buffers the C++ side writes into directly
-        self._obs = np.zeros((num_envs, self.obs_size), dtype=np.float32)
+        self._obs = np.zeros((num_envs, self.base_obs_size), dtype=np.float32)
+        self._rays = np.zeros((num_envs, max(rays, 1)), dtype=np.float32)
         self._actions = np.zeros(num_envs, dtype=np.int32)
         self._results = np.zeros(num_envs, dtype=np.int32)
         self._step_counts = np.zeros(num_envs, dtype=np.int32)
@@ -234,6 +253,7 @@ class OuterworldVecEnv:
         self._results_ptr = self._results.ctypes.data_as(int_p)
         self._step_counts_ptr = self._step_counts.ctypes.data_as(int_p)
         self._distances_ptr = self._distances.ctypes.data_as(float_p)
+        self._rays_ptr = self._rays.ctypes.data_as(float_p)
 
         self._prev_distances = np.zeros(num_envs, dtype=np.float32)
         self._returns = np.zeros(num_envs, dtype=np.float64)
@@ -247,8 +267,11 @@ class OuterworldVecEnv:
             if level_seed is None:
                 level_seed = int(self.rng.integers(*self.seed_range))
             difficulty = np.float32(self.difficulty)
-            _dll.ow_batch_load_generated(self._batch, i, level_seed, float(difficulty))
+            blocker = np.float32(self.blocker_chance)
+            _dll.ow_batch_load_generated_ex(self._batch, i, level_seed, float(difficulty), float(blocker))
             self.level_names[i] = f"generated {level_seed} {difficulty!s}"
+            if blocker > 0:
+                self.level_names[i] += f" {blocker!s}"
         else:
             _dll.ow_batch_load_test_level(self._batch, i)
             self.level_names[i] = "test"
@@ -256,6 +279,7 @@ class OuterworldVecEnv:
         _dll.ow_batch_observe_one(self._batch, i, row)
         self._prev_distances[i] = _dll.ow_batch_distance_one(self._batch, i, _SHAPING_CODES[self.shaping])
         self._returns[i] = 0.0
+        self._step_counts[i] = 0
         self._episode_actions[i] = []
 
     def reset(self, seed=None, level_seeds=None):
@@ -264,24 +288,33 @@ class OuterworldVecEnv:
             self.rng = np.random.default_rng(seed)
         for i in range(self.num_envs):
             self._start_episode(i, None if level_seeds is None else level_seeds[i])
-        return self._obs.copy()
+        return self._full_obs()
+
+    def _full_obs(self):
+        """The C++ observation, plus the ray distances if enabled (as a new array)."""
+        if not self.rays:
+            return self._obs.copy()
+        _dll.ow_batch_rays(self._batch, self.rays, self.ray_range, self._rays_ptr)
+        return np.concatenate([self._obs, self._rays], axis=1)
 
     def step(self, actions):
         self._actions[:] = actions
-        _dll.ow_batch_step(self._batch, self._actions_ptr, _SHAPING_CODES[self.shaping], self._results_ptr,
-                           self._step_counts_ptr, self._distances_ptr, self._obs_ptr)
+        prev_counts = self._step_counts.copy()
+        _dll.ow_batch_step_repeat(self._batch, self._actions_ptr, self.action_repeat, _SHAPING_CODES[self.shaping],
+                                  self._results_ptr, self._step_counts_ptr, self._distances_ptr, self._obs_ptr)
 
         rewards = PROGRESS_REWARD * (self._prev_distances - self._distances)
         rewards[self._results == _CRASHED] += CRASH_REWARD
         rewards[self._results == _REACHED_GOAL] += GOAL_REWARD
         self._prev_distances[:] = self._distances
         self._returns += rewards
-        for i in range(self.num_envs):
-            self._episode_actions[i].append(int(self._actions[i]))
+        # Replays are per timestep, so a repeated action is recorded once per timestep it was applied
+        for i, n in enumerate(self._step_counts - prev_counts):
+            self._episode_actions[i].extend([int(self._actions[i])] * int(n))
 
         terminated = self._results != _RUNNING
         truncated = ~terminated & (self._step_counts >= self.max_steps)
-        info = {"final_obs": self._obs.copy(), "episodes": []}
+        info = {"final_obs": self._full_obs(), "episodes": []}
 
         for i in np.flatnonzero(terminated | truncated):
             result = int(self._results[i])
@@ -296,7 +329,8 @@ class OuterworldVecEnv:
             self.last_episode = (self.level_names[i], self._episode_actions[i])
             self._start_episode(i)
 
-        return self._obs.copy(), rewards.astype(np.float32), terminated, truncated, info
+        obs = self._full_obs() if (terminated | truncated).any() else info["final_obs"].copy()
+        return obs, rewards.astype(np.float32), terminated, truncated, info
 
     def save_replay(self, path):
         """Saves the most recently finished episode. Watch it with: outerworld.exe --replay <path>"""

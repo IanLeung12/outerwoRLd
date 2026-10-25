@@ -20,6 +20,7 @@ struct GenParams {
     float spawnAngleJitter = std::numbers::pi_v<float>;         // 0 = facing the goal, pi = any direction
     float minGoalHalfSize = 0.06f;
     float maxGoalHalfSize = 0.2f;
+    float blockerChance = 0.0f;   // chance of one extra planet right on the spawn-goal line (flying straight crashes)
 };
 
 // 0 = easy (few obstacles, no gravity, goal close and facing it), 1 = hard. For curriculum learning.

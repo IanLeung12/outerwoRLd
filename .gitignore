@@ -145,3 +145,4 @@ __pycache__/
 
 # training output (tensorboard logs, checkpoints, replays)
 runs/
+replays/
