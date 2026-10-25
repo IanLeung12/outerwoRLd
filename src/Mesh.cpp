@@ -1,5 +1,7 @@
 #include "Mesh.h"
 #include <glad/glad.h>
+#include <numbers>
+#include <cmath>
 
 Mesh::Mesh(const std::vector<float>& vertices) {
     vertexCount = vertices.size()/3;
@@ -20,4 +22,13 @@ Mesh::~Mesh() {
 void Mesh::draw(unsigned int mode) const {
     glBindVertexArray(vao);
     glDrawArrays(mode, 0, vertexCount);
+}
+
+std::vector<float> Mesh::makeCircle(float radius, int segments) {
+    std::vector<float> circle;
+    for (int i = 0; i < segments; ++i) {
+        float angle  = (float)i / segments * 2 * std::numbers::pi_v<float>;
+        circle.insert(circle.end(), {std::cos(angle) * radius, std::sin(angle) * radius, 0.0f});
+    }
+    return circle;
 }

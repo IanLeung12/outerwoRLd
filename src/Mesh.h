@@ -11,6 +11,8 @@ public:
 
     void draw(unsigned int mode) const;
 
+    static std::vector<float> makeCircle(float radius, int segments);
+
 private:
     unsigned int vao;
     unsigned int vbo;

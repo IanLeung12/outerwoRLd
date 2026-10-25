@@ -5,8 +5,8 @@
 #include "Shader.h"
 #include "Mesh.h"
 #include "Ship.h"
-#include <cmath>
-#include <iostream>
+#include "Obstacle.h"
+#include "collision.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -31,6 +31,15 @@ int main() {
             -0.03f, -0.05f, 0.0f,
         };
         Mesh shipMesh(vertices);
+
+        Mesh circleMesh(Mesh::makeCircle(1.0f, 12));
+
+        std::vector<Obstacle> obstacles = {
+            {{ 0.8f,  0.4f}, 0.15f},
+            {{-0.9f, -0.5f}, 0.25f},
+            {{-0.6f,  0.6f}, 0.10f},
+            {{ 1.2f, -0.3f}, 0.20f},
+        };
 
         const char* vertexSrc = R"(
             #version 330 core
@@ -73,6 +82,12 @@ int main() {
                 shipinput.turnRight = true;
             }
             ship.update(dt, shipinput);
+            for (auto& obstacle: obstacles) {
+                if (circlesOverlap(ship.getPosition(), constants::SHIP_RADIUS, obstacle.position, obstacle.radius)) {
+                    ship.reset();
+                    break;
+                }
+            }
             
             int w, h;
             glfwGetFramebufferSize(window, &w, &h);
@@ -87,6 +102,12 @@ int main() {
             shader.use();
             shader.setMat4("uTransform", projection * model);
             shipMesh.draw(GL_LINE_LOOP);
+
+            for (const Obstacle& o : obstacles) {
+                shader.setMat4("uTransform", projection * o.modelMatrix());
+                circleMesh.draw(GL_LINE_LOOP);
+            }
+
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
