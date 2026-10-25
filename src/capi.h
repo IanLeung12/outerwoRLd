@@ -32,6 +32,28 @@ OW_API float ow_goal_distance(const OwWorld* world);   // straight line to the g
 OW_API float ow_path_distance(const OwWorld* world);   // travel distance around obstacles
 OW_API int ow_step_count(const OwWorld* world);
 
+// ---- Batched: many worlds stepped by one call, so Python pays its per-call overhead once per
+// batch instead of once per world. Every array argument holds one entry per world, in order.
+
+typedef struct OwBatch OwBatch;
+
+OW_API OwBatch* ow_batch_create(int num_worlds);   // all start on the test level
+OW_API void ow_batch_destroy(OwBatch* batch);
+
+OW_API void ow_batch_load_test_level(OwBatch* batch, int index);
+OW_API void ow_batch_load_generated(OwBatch* batch, int index, unsigned int seed, float difficulty);
+
+// Advances every world one fixed timestep. shaping chooses which distance is written:
+// 0 = straight line, 1 = path around obstacles, 2 = none (writes 0).
+// Writes results (0 running, 1 crashed, 2 goal), step counts, distances, and
+// num_worlds * ow_obs_size() observations, all taken after the step.
+OW_API void ow_batch_step(OwBatch* batch, const int* actions, int shaping,
+                          int* results, int* step_counts, float* distances, float* observations);
+
+// One world's observation and distance, e.g. right after loading it a new level.
+OW_API void ow_batch_observe_one(const OwBatch* batch, int index, float* out);
+OW_API float ow_batch_distance_one(const OwBatch* batch, int index, int shaping);
+
 #ifdef __cplusplus
 }
 #endif

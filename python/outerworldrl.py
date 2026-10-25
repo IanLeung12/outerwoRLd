@@ -3,7 +3,7 @@ import torch
 import time
 import gymnasium as gym
 import numpy as np
-from outerworld_env import OuterworldEnv, EVAL_SEEDS
+from outerworld_env import OuterworldVecEnv, EVAL_SEEDS
 from collections import Counter, deque
 from torch.utils.tensorboard import SummaryWriter
 
@@ -11,8 +11,14 @@ writer = SummaryWriter(f"runs/curriculum_path_{time.strftime('%m%d_%H%M')}")
 torch.set_num_threads(1)
 torch.distributions.Distribution.set_default_validate_args(False)
 
-env = OuterworldEnv(levels="generated", difficulty=0.0, shaping="path")
-eval_env = OuterworldEnv(levels="generated", difficulty=0.0,  seed_range=EVAL_SEEDS)
+NUM_ENVS = 32          # worlds stepped together
+NUM_STEPS = 128        # steps per world per iteration -> NUM_ENVS * NUM_STEPS = 4096 steps per batch
+GAMMA = 0.99
+LAMBDA = 0.95
+EVAL_EPISODES = 50
+
+env = OuterworldVecEnv(NUM_ENVS, levels="generated", difficulty=0.0, shaping="path", seed=0)
+eval_env = OuterworldVecEnv(EVAL_EPISODES, levels="generated", difficulty=0.0, seed_range=EVAL_SEEDS)
 
 class RunningMeanStd:
     def __init__(self):
@@ -30,7 +36,7 @@ class RunningMeanStd:
         self.count = total
 
     def normalize(self, obs):
-        return np.clip((obs - self.mean) / (self.var + 1e-8)**0.5, -10, 10)
+        return np.clip((obs - self.mean) / (self.var + 1e-8)**0.5, -10, 10).astype(np.float32)
 
 obs_rms = RunningMeanStd()
 
@@ -56,105 +62,95 @@ value_net = torch.nn.Sequential(
 )
 value_optimizer = torch.optim.Adam(value_net.parameters(), lr=3e-4)
 
-for idx in (0, 2):                                
+for idx in (0, 2):
     init_layer(policy[idx], np.sqrt(2))
     init_layer(value_net[idx], np.sqrt(2))
-init_layer(policy[4], 0.01)                          
-init_layer(value_net[4], 1.0)                        
+init_layer(policy[4], 0.01)
+init_layer(value_net[4], 1.0)
 
 print(torch.softmax(policy(torch.zeros(54)), dim=0))
 
-def run_episode():
-    obs, info = env.reset()
-    probs, rwds, all_obs, raw_obs, actions = [], [], [], [], []
-    terminated = False
-    while True:
-        norm_obs = obs_rms.normalize(obs)
-        all_obs.append(norm_obs)
-        raw_obs.append(obs)
-        prob, action = choose_action(norm_obs)
-        obs, reward, terminated, truncated, info = env.step(action.item())
-        
-        probs.append(prob)
-        rwds.append(reward)
-        actions.append(action.item())
-
-        if terminated or truncated:
-            break
-    return probs, rwds, all_obs, obs_rms.normalize(obs), terminated, actions, info, raw_obs
-
-def choose_action(obs):
+def value_of(norm_obs):
     with torch.no_grad():
-        obs = torch.tensor(obs, dtype=torch.float32)
-        logits = policy(obs)                                  
-        dist = torch.distributions.Categorical(logits=logits)  
-        action = dist.sample()                               
-        log_prob = dist.log_prob(action)                        
+        return value_net(torch.from_numpy(norm_obs)).squeeze(1).numpy()
 
-    return log_prob, action
+def collect(obs):
+    """Plays NUM_STEPS steps in every world. Episodes that are still running carry on next time."""
+    all_obs = np.zeros((NUM_STEPS, NUM_ENVS, 54), dtype=np.float32)
+    raw_obs = np.zeros((NUM_STEPS, NUM_ENVS, 54), dtype=np.float32)
+    actions = np.zeros((NUM_STEPS, NUM_ENVS), dtype=np.int64)
+    log_probs = np.zeros((NUM_STEPS, NUM_ENVS), dtype=np.float32)
+    values = np.zeros((NUM_STEPS, NUM_ENVS), dtype=np.float32)
+    rewards = np.zeros((NUM_STEPS, NUM_ENVS), dtype=np.float32)
+    dones = np.zeros((NUM_STEPS, NUM_ENVS), dtype=np.float32)
+    episodes = []
 
-
-def gae(rewards, values, vfinal, gam, lam):
-    advs = [0] * len(rewards)
-    running = 0
-    for i in range(len(rewards)-1,-1,-1):
-        next_value = values[i+1] if i < len(rewards)-1 else vfinal
-        delta = rewards[i] + gam * next_value - values[i]
-        running = delta + lam * gam * running
-        advs[i] = running
-    return advs
-
-def evaluate(num_episodes=50):
-    successes = 0
-    eval_counter = Counter()
-    for k in range(num_episodes):
-        obs, info = eval_env.reset(options={"level_seed": EVAL_SEEDS[0] + k})
-        while True:
-            obs = obs_rms.normalize(obs)
-            with torch.no_grad():
-                obs = torch.tensor(obs, dtype=torch.float32)
-                logits = policy(obs)                                   
-                action = logits.argmax().item()                            
-                obs, reward, terminated, truncated, info = eval_env.step(action)
-                if terminated or truncated:
-                    successes += info["is_success"]
-                    eval_counter[info["result"]] += 1
-                    break
-    return successes / num_episodes, eval_counter
-
-num_iterations = 5
-l10_suc = deque(maxlen=10)
-for i in range(num_iterations):
-    train_counter = Counter()
-    all_log_probs, all_advantages, all_targets, all_obs, all_actions, all_raw_obs, successes = [], [], [], [], [], [], []
-    for j in range(25):
-        log_probs, rewards, e_obs, obsf, terminated, actions, info, robs = run_episode()
-        train_counter[info["result"]] += 1
+    for t in range(NUM_STEPS):
+        norm_obs = obs_rms.normalize(obs)
         with torch.no_grad():
-            obs_t = torch.tensor(np.array(e_obs), dtype=torch.float32)   
-            values = value_net(obs_t).squeeze(1).tolist()               
+            dist = torch.distributions.Categorical(logits=policy(torch.from_numpy(norm_obs)))
+            action = dist.sample()
+            log_probs[t] = dist.log_prob(action).numpy()
+        values[t] = value_of(norm_obs)
+        all_obs[t] = norm_obs
+        raw_obs[t] = obs
+        actions[t] = action.numpy()
 
-            if terminated:
-                vfinal = 0.0                                           
-            else:
-                final_t = torch.tensor(obsf, dtype=torch.float32)
-                vfinal = value_net(final_t).item()                       
+        obs, reward, terminated, truncated, info = env.step(actions[t])
 
-        advantages = gae(rewards, values, vfinal, 0.99, 0.95)
-        targets = [a + v for a, v in zip(advantages, values)]
-        all_log_probs.extend(log_probs)
-        all_advantages.extend(advantages)
-        all_targets.extend(targets)
-        all_obs.extend(e_obs)
-        all_actions.extend(actions)
-        all_raw_obs.extend(robs)
-        successes.append(info["is_success"])
-    obs_rms.update(np.array(all_raw_obs))
-    log_probs_t = torch.stack(all_log_probs)
-    advantages_t = torch.tensor(all_advantages, dtype=torch.float32)
-    targets_t = torch.tensor(all_targets, dtype=torch.float32)
-    obs_t = torch.tensor(np.array(all_obs), dtype=torch.float32)
-    actions_t = torch.tensor(all_actions)
+        # A timeout isn't a real ending: add the value of where the episode was cut off,
+        # so from here on every finished episode can be treated the same way
+        for k in np.flatnonzero(truncated):
+            final = obs_rms.normalize(info["final_obs"][k:k + 1])
+            reward[k] += GAMMA * value_of(final)[0]
+        rewards[t] = reward
+        dones[t] = terminated | truncated
+        episodes.extend(info["episodes"])
+
+    next_value = value_of(obs_rms.normalize(obs))
+    return obs, all_obs, raw_obs, actions, log_probs, values, rewards, dones, next_value, episodes
+
+def gae(rewards, values, dones, next_value):
+    """Advantages for all worlds at once. dones[t] = the episode ended at step t."""
+    advantages = np.zeros_like(rewards)
+    running = np.zeros(NUM_ENVS, dtype=np.float32)
+    for t in range(NUM_STEPS - 1, -1, -1):
+        next_values = values[t + 1] if t < NUM_STEPS - 1 else next_value
+        not_done = 1.0 - dones[t]
+        delta = rewards[t] + GAMMA * next_values * not_done - values[t]
+        running = delta + GAMMA * LAMBDA * not_done * running
+        advantages[t] = running
+    return advantages
+
+def evaluate():
+    """Plays each of the EVAL_EPISODES held-out levels once, choosing the most likely action."""
+    obs = eval_env.reset(level_seeds=[EVAL_SEEDS[0] + k for k in range(EVAL_EPISODES)])
+    results = [None] * EVAL_EPISODES
+    while None in results:
+        with torch.no_grad():
+            logits = policy(torch.from_numpy(obs_rms.normalize(obs)))
+        obs, reward, terminated, truncated, info = eval_env.step(logits.argmax(dim=1).numpy())
+        for ep in info["episodes"]:
+            if results[ep["index"]] is None:   # only the first episode on each level counts
+                results[ep["index"]] = ep["result"]
+    eval_counter = Counter(results)
+    return eval_counter["goal"] / EVAL_EPISODES, eval_counter
+
+num_iterations = 500
+l10_suc = deque(maxlen=10)
+obs = env.reset()
+for i in range(num_iterations):
+    obs, all_obs, raw_obs, actions, log_probs, values, rewards, dones, next_value, episodes = collect(obs)
+    obs_rms.update(raw_obs.reshape(-1, 54))
+    advantages = gae(rewards, values, dones, next_value)
+    targets = advantages + values
+
+    # Flatten (steps, worlds) into one batch; the update below is the same as before
+    log_probs_t = torch.from_numpy(log_probs.reshape(-1))
+    advantages_t = torch.from_numpy(advantages.reshape(-1))
+    targets_t = torch.from_numpy(targets.reshape(-1))
+    obs_t = torch.from_numpy(all_obs.reshape(-1, 54))
+    actions_t = torch.from_numpy(actions.reshape(-1))
 
     old_log_prob = log_probs_t
     advantages_t = (advantages_t - advantages_t.mean()) / (advantages_t.std() + 1e-8)
@@ -169,8 +165,8 @@ for i in range(num_iterations):
         stop = False
         for start in range(0, batch_size, minibatch_size):
             idx = indices[start:start + minibatch_size]
-            logits = policy(obs_t[idx])                             
-            dist = torch.distributions.Categorical(logits=logits)                             
+            logits = policy(obs_t[idx])
+            dist = torch.distributions.Categorical(logits=logits)
             new_log_prob = dist.log_prob(actions_t[idx])
             log_ratio = new_log_prob - old_log_prob[idx]
             ratio = log_ratio.exp()
@@ -188,8 +184,8 @@ for i in range(num_iterations):
             optimizer.step()
             fracs.append(((ratio - 1).abs() > 0.2).float().mean().item())
 
-            values = value_net(obs_t[idx]).squeeze(1)
-            vloss = ((values - targets_t[idx])**2).mean()
+            values_pred = value_net(obs_t[idx]).squeeze(1)
+            vloss = ((values_pred - targets_t[idx])**2).mean()
             value_optimizer.zero_grad()
             vloss.backward()
             torch.nn.utils.clip_grad_norm_(value_net.parameters(), 0.5)
@@ -201,19 +197,23 @@ for i in range(num_iterations):
         if stop:
             break
 
-    successpct = sum(successes) / len(successes)
+    # Episodes that finished during this batch (it no longer contains a fixed number of them)
+    train_counter = Counter(ep["result"] for ep in episodes)
+    num_episodes = max(len(episodes), 1)
+    successpct = train_counter["goal"] / num_episodes
     writer.add_scalar("train/success", successpct, i)
     writer.add_scalar("loss/value", value_loss, i)
     writer.add_scalar("ppo/clip_frac", clip_frac, i)
-    writer.add_scalar("train/crash", train_counter["crash"] / 25, i)
-    writer.add_scalar("train/timeout", train_counter["timeout"] / 25, i)
+    writer.add_scalar("train/crash", train_counter["crash"] / num_episodes, i)
+    writer.add_scalar("train/timeout", train_counter["timeout"] / num_episodes, i)
+    writer.add_scalar("train/episodes", len(episodes), i)
     writer.add_scalar("curriculum/difficulty", env.difficulty, i)
-    print(f"iteration {i}: success {successpct:.0%}, value loss {value_loss:.2f}, clip frac {clip_frac:.2f}")
+    print(f"iteration {i}: success {successpct:.0%} ({len(episodes)} episodes), value loss {value_loss:.2f}, clip frac {clip_frac:.2f}")
     if i % 10 == 0:
         eval_success, eval_outcomes = evaluate()
         print(f"  eval success: {eval_success:.0%}")
         writer.add_scalar("eval/success", eval_success, i)
-        writer.add_scalar("eval/crash", eval_outcomes["crash"] / 50, i)
+        writer.add_scalar("eval/crash", eval_outcomes["crash"] / EVAL_EPISODES, i)
     if i%50 == 0:
         torch.save({
             "policy": policy.state_dict(),
@@ -221,10 +221,12 @@ for i in range(num_iterations):
             "obs_mean": obs_rms.mean, "obs_var": obs_rms.var, "obs_count": obs_rms.count,
             "iteration": i,
         }, f"{writer.log_dir}/latest.pt")
-    l10_suc.append(successpct)
+    if episodes:
+        l10_suc.append(successpct)
     if len(l10_suc) == l10_suc.maxlen and np.mean(l10_suc) > 0.8:
         env.difficulty = min(env.difficulty + 0.05, 1.0)
         eval_env.difficulty = env.difficulty
         l10_suc.clear()
-    env.save_replay("runs/latest.txt")
+    if env.last_episode is not None:
+        env.save_replay("runs/latest.txt")
 
