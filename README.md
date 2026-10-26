@@ -40,6 +40,7 @@ cmake -S . -B build -G Ninja; cmake --build build      # or F7 in VS Code
 python python\outerworldrl.py                            # train (logs to runs/, view with TensorBoard)
 python experiments\replay.py runs\exp\<run>\final.pt --random 5 --difficulty 1.0 --out replays
 .\build\outerworld.exe --replay replays\<file>.txt       # watch the agent
+python experiments\replay.py runs\exp\<run>\final.pt --random 20 --watch   # 20 new levels, N / P to switch
 python experiments\analyze.py runs\exp\<run>\final.pt 0.0 0.5 1.0 --levels 1000
 ```
 

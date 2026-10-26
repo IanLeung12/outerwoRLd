@@ -300,6 +300,55 @@ label every visited state with their mean action probabilities, and the student 
   `models.py`: networks. `plot_progress.py`: the chart above. `NOTES.md`: the full log.
 - Runs are in `runs/exp/<name>/` (TensorBoard: `python -m tensorboard.main --logdir runs/exp`).
 
+**Reward levers for faster, more direct routes** (fine-tunes of r26 seed 1: 500 iterations, difficulty uniform 0-1,
+50% blocker levels, learning rate 0.0001 annealed; 1000 held-out levels each; path efficiency = route flown / shortest
+route, median over successes; noise on success about +-0.75 points):
+
+| run | success 1.0 | seconds to goal 1.0 | efficiency 1.0 | success 0.5 | seconds to goal 0 | blocker efficiency | blocker seconds |
+|---|---|---|---|---|---|---|---|
+| starting agent (500 levels) | 95% | 3.35 | 1.17 | 97% | 1.90 | 1.26 | 2.00 |
+| f0 control (reward unchanged) | 94.0% | 3.28 | 1.16 | 98.2% | 1.61 | 1.07 | 1.67 |
+| f1 time penalty 0.01 | 94.2% | 3.23 | 1.15 | 98.7% | 1.55 | 1.07 | 1.65 |
+| f2 time penalty 0.03 | **95.3%** | 3.16 | 1.15 | 98.1% | 1.60 | 1.07 | 1.66 |
+| f3 time penalty 0.1 | 92.8% | **3.06** | **1.13** | 98.4% | 1.54 | 1.06 | 1.60 |
+| f4 discount 0.98 | 93.6% | **3.06** | **1.13** | 98.6% | **1.52** | **1.05** | **1.59** |
+| f5 crash penalty -2 | 92.9% | 3.20 | 1.14 | 98.6% | 1.57 | 1.07 | 1.66 |
+
+- The biggest change is in the control: fine-tuning on a mix of difficulties (instead of the curriculum's end state,
+  which trains only at 1.0) made easy and blocker routes much tighter (blocker median 1.26 -> 1.07, difficulty 0
+  1.90 s -> 1.61 s) at no cost in success.
+- On top of that, a discount of 0.98 or a time penalty of 0.1 cuts about 7% off the time at difficulty 1.0, with
+  slightly tighter routes. The time penalty of 0.1 costs about 1 point of success at 1.0; the discount of 0.98
+  costs about 0.4 (within noise). A time penalty of 0.03 is the best on success and about 4% faster.
+- A smaller crash penalty is worse on every measure.
+
+**The 4000-iteration annealed run** (`r27_envs64_anneal_4000`; the computer was switched off at iteration 3990, so
+this is the iteration-3950 checkpoint, `latest.pt`, with the learning rate already almost zero). 1000 levels:
+
+| | difficulty 0 | 0.5 | 1.0 |
+|---|---|---|---|
+| greedy | 98.6% | 94.4% (21 stuck) | 93.7% (44 stuck, only 19 crashes) |
+| greedy with unstick | | 96.4% | **97.5%** (25 crashes) |
+
+The best result at difficulty 1.0 of any policy, ensembles included, but only with unstick: twice the training
+nearly eliminated crashes on hard levels, while the greedy policy freezes more often. It is weaker at 0.5 than the
+2000-iteration agents, consistent with the curriculum training only at 1.0 once it gets there (see the control above).
+
+**Mixed-difficulty fine-tune of the 4000-iteration run** (`f6_r27_mix`, and `f7_r27_mix_gamma98` with discount 0.98;
+500 iterations from r27's iteration-3950 checkpoint, same settings as f0). 1000 held-out levels; "unstick" in brackets:
+
+| | difficulty 0 | 0.5 | 1.0 | seconds to goal 0 / 0.5 / 1.0 | efficiency at 1.0 | blocker efficiency |
+|---|---|---|---|---|---|---|
+| r27 (start) | 98.6% | 94.4% (96.4%) | 93.7% (**97.5%**) | 1.78 / 2.46 / 2.99 | 1.13 | - |
+| f6 mix | 99.6% | 96.4% (**99.2%**) | 92.6% (96.3%) | 1.51 / 2.34 / 2.97 | 1.12 | 1.08 |
+| f7 mix + discount 0.98 | 99.7% | 96.9% (98.4%) | 93.5% (96.6%) | **1.44 / 2.24 / 2.89** | **1.11** | **1.06** |
+
+- Mixing difficulties recovered the medium levels (with unstick, 96.4% -> 99.2%) and sped up easy ones by 15%,
+  at a cost of about 1 point at difficulty 1.0 (crashes 25 -> 37 per 1000, with unstick).
+- Adding discount 0.98 makes it the fastest agent at every difficulty, with the tightest routes, at no clear cost.
+- This lineage still gets stuck greedily (32-41 of 1000 levels at 0.5 and 1.0), so it needs unstick. The distilled
+  network (99.2% / 98.7% / 96.2% greedy) reaches the same success without it.
+
 ## Suggested next steps
 
 **To pick up where this left off:**

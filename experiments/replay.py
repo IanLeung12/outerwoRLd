@@ -3,6 +3,7 @@
     python experiments/replay.py runs/exp/<name>/final.pt --difficulty 1.0 --levels 0-9 --out replays/
     python experiments/replay.py runs/exp/<name>/final.pt --seeds 12345,777 --difficulty 0.8
     python experiments/replay.py runs/exp/<name>/final.pt --random 5
+    python experiments/replay.py runs/exp/<name>/final.pt --random 20 --watch   (record, then open the viewer; N / P to switch)
     build/outerworld.exe --replay replays/level0_goal.txt
 
 Plays greedily (argmax). --levels are held-out level indices; --seeds are raw level seeds (the same numbers as
@@ -11,7 +12,9 @@ seeds from the held-out range. Files are named level<index>_<result>.txt or seed
 """
 
 import argparse
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +32,9 @@ p.add_argument("--blocker", type=float, default=0.0)
 p.add_argument("--levels", default="0-9", help="held-out level indices, e.g. 0-9 or 3,7,12")
 p.add_argument("--seeds", default=None, help="raw level seeds, e.g. 12345,777 (overrides --levels)")
 p.add_argument("--random", type=int, default=0, help="play N random held-out seeds (overrides --levels)")
-p.add_argument("--out", default="replays")
+p.add_argument("--out", default=None, help="folder for the replay files (default: replays, or a new runs/watch/<time> with --watch)")
+p.add_argument("--watch", action="store_true", help="open the viewer on the recorded replays afterwards")
+p.add_argument("--exe", default=str(Path(__file__).resolve().parent.parent / "build" / "outerworld.exe"))
 a = p.parse_args()
 
 if a.seeds:
@@ -62,7 +67,7 @@ def norm(x):
     return np.clip((x - ck["obs_mean"]) / std, -10, 10).astype(np.float32)
 
 
-out = Path(a.out)
+out = Path(a.out or (f"runs/watch/{time.strftime('%m%d_%H%M%S')}" if a.watch else "replays"))
 out.mkdir(parents=True, exist_ok=True)
 for seed, label in runs:
     env = OuterworldVecEnv(1, levels="generated", difficulty=a.difficulty, seed_range=EVAL_SEEDS,
@@ -79,3 +84,6 @@ for seed, label in runs:
     path = out / f"{label}_{result}.txt"
     env.save_replay(str(path))
     print(f"{path}  ({info['episodes'][0]['length']} steps)")
+
+if a.watch:
+    subprocess.run([a.exe, "--replays", str(out)])
